@@ -1,7 +1,7 @@
 /**
  * voicetts.cpp - AML TTS Mod untuk SA-MP Android
  * Google TTS -> synthesizeToFile -> WAV PCM -> BASS push stream (audio game)
- * v2.6 - PCM masuk BASS stream game, bisa di-capture TikTok/streaming
+ * v2.7 - PCM masuk BASS stream game, bisa di-capture TikTok/streaming
  * Author: brruham
  */
 
@@ -18,7 +18,7 @@
 #define LOGFILE   "/storage/emulated/0/voicetts_log.txt"
 #define ADDR_FILE "/storage/emulated/0/voicetts_addr.txt"
 #define WAV_FILE  "/storage/emulated/0/tts_out.wav"
-#define VERSION   "v2.6"
+#define VERSION   "v2.7"
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 static void logf_impl(const char* msg) {
@@ -264,24 +264,29 @@ static void* speak_thread(void* arg) {
         return nullptr;
     }
 
-    // Poll tunggu file selesai ditulis (max 5 detik)
+    // Poll tunggu file selesai ditulis — cek header RIFF valid (max 8 detik)
     int waited = 0;
-    while (waited < 50) {
+    bool wav_ready = false;
+    while (waited < 80) {
         usleep(100000); // 100ms
         FILE* f = fopen(WAV_FILE, "rb");
         if (f) {
-            fseek(f, 0, SEEK_END);
-            long sz = ftell(f); fclose(f);
-            if (sz > 44) {
-                LOGF("[TTS] WAV file ready: %ld bytes (waited %dms)", sz, waited*100);
+            char magic[4] = {};
+            fread(magic, 1, 4, f);
+            fclose(f);
+            if (strncmp(magic, "RIFF", 4) == 0) {
+                // Header valid, tapi tunggu 100ms lagi supaya data chunk selesai
+                usleep(100000);
+                wav_ready = true;
+                LOGF("[TTS] WAV ready (waited %dms)", (waited+1)*100);
                 break;
             }
         }
         waited++;
     }
 
-    if (waited >= 50) {
-        LOGF("[TTS] ERROR: WAV file timeout"); g_is_playing = 0;
+    if (!wav_ready) {
+        LOGF("[TTS] ERROR: WAV timeout atau header invalid"); g_is_playing = 0;
         if (attached) g_jvm->DetachCurrentThread();
         return nullptr;
     }
