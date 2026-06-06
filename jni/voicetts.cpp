@@ -1,7 +1,7 @@
 /**
  * voicetts.cpp - AML TTS Mod untuk SA-MP Android
  * Google TTS -> synthesizeToFile -> WAV PCM -> BASS push stream (audio game)
- * v2.5 - PCM masuk BASS stream game, bisa di-capture TikTok/streaming
+ * v2.6 - PCM masuk BASS stream game, bisa di-capture TikTok/streaming
  * Author: brruham
  */
 
@@ -18,7 +18,7 @@
 #define LOGFILE   "/storage/emulated/0/voicetts_log.txt"
 #define ADDR_FILE "/storage/emulated/0/voicetts_addr.txt"
 #define WAV_FILE  "/storage/emulated/0/tts_out.wav"
-#define VERSION   "v2.5"
+#define VERSION   "v2.6"
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 static void logf_impl(const char* msg) {
@@ -151,6 +151,18 @@ static void push_wav_to_bass(const char* path) {
     if (fread(&hdr, 1, sizeof(hdr), f) < sizeof(hdr)) {
         LOGF("[TTS] push_wav: header read failed"); fclose(f); return;
     }
+
+    // Dump 16 byte pertama untuk debug
+    LOGF("[TTS] header[0..15]: %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x  %02x %02x %02x %02x",
+        (unsigned char)((char*)&hdr)[0],  (unsigned char)((char*)&hdr)[1],
+        (unsigned char)((char*)&hdr)[2],  (unsigned char)((char*)&hdr)[3],
+        (unsigned char)((char*)&hdr)[4],  (unsigned char)((char*)&hdr)[5],
+        (unsigned char)((char*)&hdr)[6],  (unsigned char)((char*)&hdr)[7],
+        (unsigned char)((char*)&hdr)[8],  (unsigned char)((char*)&hdr)[9],
+        (unsigned char)((char*)&hdr)[10], (unsigned char)((char*)&hdr)[11],
+        (unsigned char)((char*)&hdr)[12], (unsigned char)((char*)&hdr)[13],
+        (unsigned char)((char*)&hdr)[14], (unsigned char)((char*)&hdr)[15]);
+    LOGF("[TTS] riff='%.4s' wave='%.4s'", hdr.riff, hdr.wave);
 
     // Validasi
     if (strncmp(hdr.riff, "RIFF", 4) || strncmp(hdr.wave, "WAVE", 4)) {
