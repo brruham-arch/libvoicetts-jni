@@ -345,33 +345,35 @@ EXPORT void* __GetModInfo() {
 EXPORT void OnModPreLoad() {
     remove(LOGFILE);
     remove(ADDR_FILE);
-    LOGF("[TTS] OnModPreLoad v2.1");
+    LOGF("[TTS] OnModPreLoad v2.2");
 }
 
 EXPORT void OnModLoad() {
     LOGF("[TTS] OnModLoad start");
 
-    // Ambil JavaVM dari proses game — v2.1
-    void* hJavaVM = nullptr;
-    const char* artPaths[] = {
-        "libart.so",
-        "/apex/com.android.art/lib/libart.so",
-        "/apex/com.android.art/lib64/libart.so",
-        "/system/lib/libart.so",
-        "/system/lib64/libart.so",
-        "libdvm.so",
+    // Ambil JavaVM — v2.2
+    // Strategi: cari JNI_GetCreatedJavaVMs dari library yang pasti loaded
+    typedef jint (*JNI_GetCreatedJavaVMs_t)(JavaVM**, jsize, jsize*);
+    JNI_GetCreatedJavaVMs_t fnGet = nullptr;
+
+    const char* rtPaths[] = {
+        "/system/lib/libandroid_runtime.so",
+        "/system/lib64/libandroid_runtime.so",
+        "/system/lib/libnativehelper.so",
+        "/apex/com.android.art/lib/libnativehelper.so",
         nullptr
     };
-    for (int i = 0; artPaths[i]; i++) {
-        hJavaVM = dlopen(artPaths[i], RTLD_NOW | RTLD_GLOBAL);
-        if (!hJavaVM) hJavaVM = dlopen(artPaths[i], RTLD_LAZY | RTLD_NOLOAD);
-        if (hJavaVM) { LOGF("[TTS] v2.1 libart: %s", artPaths[i]); break; }
-        LOGF("[TTS] dlopen fail: %s | %s", artPaths[i], dlerror());
+    for (int i = 0; rtPaths[i]; i++) {
+        void* h = dlopen(rtPaths[i], RTLD_NOW | RTLD_GLOBAL);
+        if (!h) h = dlopen(rtPaths[i], RTLD_LAZY | RTLD_NOLOAD);
+        if (h) {
+            fnGet = (JNI_GetCreatedJavaVMs_t)dlsym(h, "JNI_GetCreatedJavaVMs");
+            if (fnGet) { LOGF("[TTS] v2.2 JNI_GetCreatedJavaVMs from: %s", rtPaths[i]); break; }
+            LOGF("[TTS] dlopen ok but sym not found: %s", rtPaths[i]);
+        } else {
+            LOGF("[TTS] dlopen fail: %s | %s", rtPaths[i], dlerror());
+        }
     }
-    if (!hJavaVM) { LOGF("[TTS] ERROR: libart/libdvm not found"); return; }
-
-    typedef jint (*JNI_GetCreatedJavaVMs_t)(JavaVM**, jsize, jsize*);
-    auto fnGet = (JNI_GetCreatedJavaVMs_t)dlsym(hJavaVM, "JNI_GetCreatedJavaVMs");
     if (!fnGet) { LOGF("[TTS] ERROR: JNI_GetCreatedJavaVMs not found"); return; }
 
     jsize vmCount = 0;
@@ -379,7 +381,7 @@ EXPORT void OnModLoad() {
     fnGet(vms, 1, &vmCount);
     if (vmCount < 1 || !vms[0]) { LOGF("[TTS] ERROR: no JavaVM"); return; }
     g_jvm = vms[0];
-    LOGF("[TTS] JavaVM: %p", g_jvm);
+    LOGF("[TTS] v2.2 JavaVM: %p", g_jvm);
 
     // Load BASS
     void* hBASS = dlopen("libBASS.so", RTLD_NOW | RTLD_GLOBAL);
