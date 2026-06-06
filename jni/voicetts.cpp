@@ -1,7 +1,7 @@
 /**
  * voicetts.cpp - AML TTS Mod untuk SA-MP Android
  * Google TTS -> synthesizeToFile -> WAV PCM -> BASS push stream (audio game)
- * v2.4 - PCM masuk BASS stream game, bisa di-capture TikTok/streaming
+ * v2.5 - PCM masuk BASS stream game, bisa di-capture TikTok/streaming
  * Author: brruham
  */
 
@@ -18,7 +18,7 @@
 #define LOGFILE   "/storage/emulated/0/voicetts_log.txt"
 #define ADDR_FILE "/storage/emulated/0/voicetts_addr.txt"
 #define WAV_FILE  "/storage/emulated/0/tts_out.wav"
-#define VERSION   "v2.4"
+#define VERSION   "v2.5"
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 static void logf_impl(const char* msg) {
@@ -213,23 +213,37 @@ static void* speak_thread(void* arg) {
     if (g_pitch_mid) { env->CallIntMethod(g_tts_obj, g_pitch_mid, (jfloat)g_pitch); env->ExceptionClear(); }
     if (g_rate_mid)  { env->CallIntMethod(g_tts_obj, g_rate_mid,  (jfloat)g_rate);  env->ExceptionClear(); }
 
-    // synthesizeToFile(text, null, file, utteranceId) — API 21+
-    jstring jtext = env->NewStringUTF(text);
-    jstring jfile = env->NewStringUTF(WAV_FILE);
-    jstring juid  = env->NewStringUTF("tts_synth");
-
     remove(WAV_FILE);
 
+    jstring jtext = env->NewStringUTF(text);
+    jstring juid  = env->NewStringUTF("tts_synth");
+
+    // Buat java.io.File object untuk path WAV
+    jclass fileCls    = env->FindClass("java/io/File");
+    jmethodID fileMid = env->GetMethodID(fileCls, "<init>", "(Ljava/lang/String;)V");
+    jstring jpath     = env->NewStringUTF(WAV_FILE);
+    jobject fileObj   = env->NewObject(fileCls, fileMid, jpath);
+    env->DeleteLocalRef(jpath);
+    env->ExceptionClear();
+
     int ret = -1;
-    if (g_synth_mid) {
+    if (g_synth_mid && fileObj) {
+        // API 21+: synthesizeToFile(CharSequence, Bundle, File, String)
         ret = env->CallIntMethod(g_tts_obj, g_synth_mid,
-            jtext, (jobject)nullptr, jfile, juid);
+            jtext, (jobject)nullptr, fileObj, juid);
+        env->ExceptionClear();
+    } else if (g_synth_mid) {
+        // fallback legacy: synthesizeToFile(String, HashMap, String)
+        jstring jpath2 = env->NewStringUTF(WAV_FILE);
+        ret = env->CallIntMethod(g_tts_obj, g_synth_mid,
+            jtext, (jobject)nullptr, jpath2);
+        env->DeleteLocalRef(jpath2);
         env->ExceptionClear();
     }
     env->DeleteLocalRef(jtext);
-    env->DeleteLocalRef(jfile);
     env->DeleteLocalRef(juid);
-    LOGF("[TTS] synthesizeToFile ret=%d", ret);
+    if (fileObj) env->DeleteLocalRef(fileObj);
+    LOGF("[TTS] synthesizeToFile ret=%d file=%s", ret, WAV_FILE);
 
     if (ret != 0) { // SUCCESS = 0
         LOGF("[TTS] synthesizeToFile ERROR ret=%d", ret);
