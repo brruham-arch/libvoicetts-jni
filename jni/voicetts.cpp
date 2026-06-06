@@ -345,17 +345,29 @@ EXPORT void* __GetModInfo() {
 EXPORT void OnModPreLoad() {
     remove(LOGFILE);
     remove(ADDR_FILE);
-    LOGF("[TTS] OnModPreLoad v2.0");
+    LOGF("[TTS] OnModPreLoad v2.1");
 }
 
 EXPORT void OnModLoad() {
     LOGF("[TTS] OnModLoad start");
 
-    // Ambil JavaVM dari proses game
-    void* hJavaVM = dlopen("libart.so", RTLD_NOW | RTLD_NOLOAD);
-    if (!hJavaVM) hJavaVM = dlopen("/apex/com.android.art/lib/libart.so", RTLD_NOW | RTLD_NOLOAD);
-    if (!hJavaVM) hJavaVM = dlopen("/apex/com.android.art/lib64/libart.so", RTLD_NOW | RTLD_NOLOAD);
-    if (!hJavaVM) hJavaVM = dlopen("libdvm.so", RTLD_NOW | RTLD_NOLOAD);
+    // Ambil JavaVM dari proses game — v2.1
+    void* hJavaVM = nullptr;
+    const char* artPaths[] = {
+        "libart.so",
+        "/apex/com.android.art/lib/libart.so",
+        "/apex/com.android.art/lib64/libart.so",
+        "/system/lib/libart.so",
+        "/system/lib64/libart.so",
+        "libdvm.so",
+        nullptr
+    };
+    for (int i = 0; artPaths[i]; i++) {
+        hJavaVM = dlopen(artPaths[i], RTLD_NOW | RTLD_GLOBAL);
+        if (!hJavaVM) hJavaVM = dlopen(artPaths[i], RTLD_LAZY | RTLD_NOLOAD);
+        if (hJavaVM) { LOGF("[TTS] v2.1 libart: %s", artPaths[i]); break; }
+        LOGF("[TTS] dlopen fail: %s | %s", artPaths[i], dlerror());
+    }
     if (!hJavaVM) { LOGF("[TTS] ERROR: libart/libdvm not found"); return; }
 
     typedef jint (*JNI_GetCreatedJavaVMs_t)(JavaVM**, jsize, jsize*);
