@@ -70,6 +70,106 @@ static int             g_pcm_read  = 0;
 static int             g_pcm_avail = 0;
 static pthread_mutex_t g_pcm_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+// ===== Deteksi vokal (LPC) =====
+#include <math.h>
+#include <time.h>
+#define VOWEL_FRAME_MS 20
+#define VOWEL_MAX 6000
+static unsigned char   g_vtl[VOWEL_MAX];
+static int             g_vtl_n  = 0;
+static long long       g_vtl_t0 = 0;
+static pthread_mutex_t g_vtl_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+static long long now_ms() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+// 0=diam 1=a 2=i 3=u 4=e 5=o
+static int classify_frame(const float* x, int n, int sr) {
+    double e = 0;
+    for (int i = 0; i < n; i++) e += x[i] * x[i];
+    if (sqrt(e / n) < 0.015) return 0;
+
+    static double w[2048], r[40], a[40], tmp[40], sp[140];
+    for (int i = 0; i < n; i++) {
+        double v = x[i] - (i ? 0.97 * x[i-1] : 0.0);
+        w[i] = v * (0.54 - 0.46 * cos(2 * M_PI * i / (n - 1)));
+    }
+    int p = 2 + sr / 1000; if (p > 32) p = 32;
+    for (int k = 0; k <= p; k++) {
+        double v = 0;
+        for (int i = 0; i + k < n; i++) v += w[i] * w[i+k];
+        r[k] = v;
+    }
+    if (r[0] < 1e-9) return 0;
+    r[0] *= 1.0001;
+
+    for (int i = 0; i <= p; i++) a[i] = 0;
+    a[0] = 1; double err = r[0];
+    for (int i = 1; i <= p; i++) {
+        double acc = r[i];
+        for (int j = 1; j < i; j++) acc += a[j] * r[i-j];
+        double k = -acc / err;
+        for (int j = 0; j <= i; j++) tmp[j] = a[j];
+        for (int j = 1; j < i; j++) a[j] = tmp[j] + k * tmp[i-j];
+        a[i] = k;
+        err *= (1 - k * k);
+        if (err < 1e-12) break;
+    }
+
+    int nf = (3500 - 200) / 25 + 1;
+    for (int i = 0; i < nf; i++) {
+        double f = 200 + 25 * i, re = 1, im = 0;
+        for (int k = 1; k <= p; k++) {
+            double ang = 2 * M_PI * f * k / sr;
+            re += a[k] * cos(ang);
+            im -= a[k] * sin(ang);
+        }
+        sp[i] = 1.0 / (re * re + im * im + 1e-12);
+    }
+    double F[2]; int np = 0;
+    for (int i = 1; i < nf - 1 && np < 2; i++)
+        if (sp[i] > sp[i-1] && sp[i] >= sp[i+1]) F[np++] = 200 + 25 * i;
+    if (np < 2) return 0;
+
+    static const double ref[5][2] = {
+        {750,1300}, {300,2300}, {350,800}, {500,1900}, {500,1000}
+    };
+    int best = 1; double bd = 1e18;
+    for (int v = 0; v < 5; v++) {
+        double d1 = (F[0] - ref[v][0]) / 150.0;
+        double d2 = (F[1] - ref[v][1]) / 400.0;
+        double d = d1 * d1 + d2 * d2;
+        if (d < bd) { bd = d; best = v + 1; }
+    }
+    return best;
+}
+
+static void analyze_vowels(const short* pcm, int sampleCount, int ch, int sr) {
+    if (ch < 1 || sr < 8000) return;
+    int total = sampleCount / ch;
+    int step  = sr * VOWEL_FRAME_MS / 1000;
+    int win   = sr * 25 / 1000; if (win > 2048) win = 2048;
+    int frames = total / step; if (frames > VOWEL_MAX) frames = VOWEL_MAX;
+    static unsigned char tl[VOWEL_MAX];
+    float x[2048];
+    for (int f = 0; f < frames; f++) {
+        int st = f * step;
+        for (int i = 0; i < win; i++)
+            x[i] = (st + i < total) ? pcm[(st + i) * ch] / 32768.0f : 0.0f;
+        tl[f] = (unsigned char)classify_frame(x, win, sr);
+    }
+    for (int f = 1; f < frames - 1; f++)
+        if (tl[f-1] == tl[f+1]) tl[f] = tl[f-1];
+    pthread_mutex_lock(&g_vtl_mtx);
+    memcpy(g_vtl, tl, frames);
+    g_vtl_n  = frames;
+    g_vtl_t0 = now_ms();
+    pthread_mutex_unlock(&g_vtl_mtx);
+}
+
 #define ESPEAK_RATE  24000  // Google TTS output rate
 #define RECORD_RATE  48000  // BASS record rate
 
@@ -287,6 +387,8 @@ static void push_wav(const char* path) {
     fclose(f);
 
     int sampleCount = (int)(got / sizeof(short));
+
+    analyze_vowels(pcmData, sampleCount, (int)hdr.numChannels, (int)hdr.sampleRate);
 
     // [1] Push ke BASS speaker stream
     if (g_play_local) {
@@ -544,6 +646,17 @@ EXPORT TtsAPI tts_api = {
     _tts_set_play_local, _tts_get_play_local,
     _tts_notify_mic_on, _tts_pcm_avail,
 };
+
+EXPORT int tts_get_vowel(void) {
+    int r = 0;
+    pthread_mutex_lock(&g_vtl_mtx);
+    if (g_vtl_n > 0) {
+        long long idx = (now_ms() - g_vtl_t0) / VOWEL_FRAME_MS;
+        if (idx >= 0 && idx < g_vtl_n) r = g_vtl[idx];
+    }
+    pthread_mutex_unlock(&g_vtl_mtx);
+    return r;
+}
 
 EXPORT void* __GetModInfo() {
     static const char* info = "libvoicetts|2.8|VoiceTTS Google TTS JNI+MicInject|brruham";
