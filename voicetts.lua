@@ -28,6 +28,29 @@ ffi.cdef[[
     } TtsAPI;
 ]]
 
+ffi.cdef[[
+    extern TtsAPI tts_api;
+    void OnModLoad(void);
+]]
+
+local function copyFile(src, dst)
+    local s = io.open(src, "rb"); if not s then return false end
+    local d = io.open(dst, "wb"); if not d then s:close() return false end
+    d:write(s:read("*a")); s:close(); d:close()
+    return true
+end
+
+local function getPackageName()
+    local parts = {}
+    for p in string.gmatch(getWorkingDirectory(), '([^/\\]+)') do parts[#parts+1] = p end
+    return parts[#parts-1]
+end
+
+local soSrc = getWorkingDirectory() .. "/libvoicetts.so"
+local soDst = "/data/data/" .. getPackageName() .. "/libvoicetts.so"
+copyFile(soSrc, soDst)
+local soOk, lib = pcall(ffi.load, soDst)
+
 local CFG_FILE  = "voicetts"
 local ADDR_FILE = "/storage/emulated/0/voicetts_addr.txt"
 
@@ -201,16 +224,9 @@ function main()
     wait(2000)
     sampAddChatMessage("[VoiceTTS] v2.8 loading...", 0xFFFF00)
 
-    for i = 1, 10 do
-        local f = io.open(ADDR_FILE,"r")
-        if f then
-            local addr = tonumber(f:read("*l")); f:close()
-            if addr and addr~=0 then
-                local ok,api = pcall(function() return ffi.cast("TtsAPI*",addr) end)
-                if ok and api then tts=api; os.remove(ADDR_FILE); break end
-            end
-        end
-        wait(1000)
+    if soOk then
+        lib.OnModLoad()
+        tts = lib.tts_api
     end
 
     if not tts then
